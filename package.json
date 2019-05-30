@@ -1,0 +1,16 @@
+{
+  "name": "whois-monitor",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node ./app.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "aws-sdk": "^2.464.0",
+    "dotenv": "^8.0.0"
+  }
+}
