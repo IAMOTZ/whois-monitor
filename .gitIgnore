@@ -5,3 +5,7 @@ devNotes.txt
 node_modules
 
 data.tsv
+
+data/*
+
+!data/.gitKeep
