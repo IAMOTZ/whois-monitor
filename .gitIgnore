@@ -9,3 +9,5 @@ data.tsv
 data/*
 
 !data/.gitKeep
+
+.vscode/*

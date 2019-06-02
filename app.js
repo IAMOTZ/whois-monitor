@@ -3,6 +3,8 @@ const AWS = require('aws-sdk');
 const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
+const moment = require('moment'); //@todo I need to find a smaller package
+const readline = require('readline');
 
 dotenv.config();
 
@@ -10,9 +12,10 @@ const s3 = new AWS.S3({ apiVersion: '2006-03-01' });
 const bucket = process.env.AWS_BUCKET;
 const logDataPath = path.join(__dirname, 'data', 'logData.tsv');
 const lastUpdatedPath = path.join(__dirname, 'data', 'lastUpdated.txt');
-
-
-const headers = 'id\tgenerated_at\treceived_at\tsource_id\tsource_name\tsource_ip\tfacility_name\tseverity_name\tprogram\tmessage\n';
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
 
 const getObject = (key) => {
   const promise = s3.getObject({ Key: key, Bucket: bucket }).promise();
@@ -36,14 +39,11 @@ const getObject = (key) => {
   });
 }
 
-const listObjects = (startDate, endDate) => {
+const listObjects = (startDate, hrsCount) => {
   const params = {
     Bucket: bucket,
-    /*
-    I can use a startAfger option to specify when I want the listing to start
-    I can also use a maxKeys option to specify the max no of keys I want to be returned
-    The combination of thae options above can help me implement my startDate and endDate filter
-    */
+    StartAfter: `papertrail/logs/whois/dt=${startDate}`,
+    MaxKeys: (hrsCount > 0) ? hrsCount : 100,
   };
   const promise = s3.listObjectsV2(params).promise();
   return new Promise((resolve, reject) => {
@@ -63,11 +63,11 @@ const writeLogDataToFile = (logString, logRange) => {
 
   // @todo: I might just want to wrap this in a promise
   fs.writeFile(logDataPath, logString, (err) => {
-    if (err) console.log('>>>Error writing to file', err);
+    if (err) return console.log('>>>Error writing to file', err);
     console.log('>>>Updated data file');
   });
   fs.writeFile(lastUpdatedPath, lastUpdatedInfo, (err) => {
-    if (err) console.log('>>>Error updating data-track file', err);
+    if (err) return console.log('>>>Error updating data-track file', err);
     console.log('>>>Updated data track file');
   });
 }
@@ -99,9 +99,39 @@ const readLogDatafromFile = () => {
   });
 }
 
+const askQuestion = (question) => {
+  return new Promise((resolve) => {
+    rl.question(question, resolve);
+  });
+}
 
+const askForDates = async () => {
+  console.info('' +
+    'Enter the start date and end date to filter data from AWS.\n' +
+    'Type d to use the default values.\n' +
+    'For start date, the default value is today.\n' +
+    'For end date, the default value is 1 month ago.\n'
+  );
+  const dateFormat = 'YYYY-MM-DD';
+  let startDate = '', endDate = '';
+  const defaultStartDate = moment().subtract(1, 'months');
+  const defaultEndDate =  moment();
+  do {
+    startDate = await askQuestion('Start date(YYYY-MM-DD)?: '); 
+  } while(startDate.toLowerCase() !== 'd' && !moment(startDate, dateFormat).isValid()); // @improvement: I should be able to output an info when date given is not valid 
+  do {
+    endDate = await askQuestion('End date(YYYY-MM-DD)?: '); 
+  } while(endDate.toLowerCase() !== 'd' && !moment(endDate, dateFormat).isValid());
+  startDate = startDate.toLocaleLowerCase() === 'd' ? defaultStartDate : moment(startDate, dateFormat);
+  endDate = endDate.toLocaleLowerCase() === 'd' ? defaultEndDate : moment(endDate, dateFormat);
+  const dateDiffInhrs = endDate.diff(startDate, 'hours');
+  return { startDate: startDate.format(dateFormat), endDate: endDate.format(dateFormat), dateDiffInhrs };
+}
 
-const main = async (useFileData = true) => {
+const main = async () => {
+  const shouldUseFileData = await askQuestion('Would you like to use existing data if they exist?(y/n) ');
+  const useFileData = shouldUseFileData.toLowerCase() === 'y' ? true : false;
+
   let logData;
 
   if(useFileData) {
@@ -109,18 +139,17 @@ const main = async (useFileData = true) => {
     if(dataFilesExist) {
       ({ logData, lastUpdatedInfo } = await readLogDatafromFile());
     } else {
-      // Make a log to the console to inform the user that data files don't exist
+      // @todo Make a log to the console to inform the user that data files don't exist
       // and then call main with useFileData set as false
     }
   } else {
-    let objects = await listObjects();
-    objects = objects.map((object) => {
-      console.log('>>>Fetching object with key: ', object.Key);
-      return getObject(object.Key);
-    });
+    const { startDate, endDate, dateDiffInhrs } = await askForDates();
+    let objects = await listObjects(startDate, dateDiffInhrs);
+    objects = objects.map(object =>  getObject(object.Key));
     objects = await Promise.all(objects);
+    const headers = 'id\tgenerated_at\treceived_at\tsource_id\tsource_name\tsource_ip\tfacility_name\tseverity_name\tprogram\tmessage\n';
     logData = headers + objects.join('');
-    const logRange = { startDate: new Date(), endDate: new Date() }; // @todo: This should not be hardcoded
+    const logRange = { startDate: startDate, endDate: endDate }; // @todo: This should not be hardcoded
     writeLogDataToFile(logData, logRange);
   }
   
@@ -128,4 +157,4 @@ const main = async (useFileData = true) => {
 }
 
 
-main(true);
+main();
