@@ -16,7 +16,7 @@ const logDataPath = path.join(__dirname, 'data', 'logData.tsv');
 const lastUpdatedPath = path.join(__dirname, 'data', 'lastUpdated.txt');
 const rl = readline.createInterface({
   input: process.stdin,
-  output: process.stdout
+  output: process.stdout,
 });
 
 const getObject = (key) => {
