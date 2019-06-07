@@ -12,6 +12,8 @@
   "dependencies": {
     "aws-sdk": "^2.464.0",
     "dotenv": "^8.0.0",
-    "moment": "^2.24.0"
+    "moment": "^2.24.0",
+    "strip-ansi": "^5.2.0",
+    "tabson": "0.0.1"
   }
 }

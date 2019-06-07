@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const moment = require('moment'); //@todo I need to find a smaller package
 const readline = require('readline');
+const tabson = require('tabson');
+const stripAnsi = require('strip-ansi');
 
 dotenv.config();
 
@@ -57,19 +59,24 @@ const listObjects = (startDate, hrsCount) => {
   })
 }
 
-const writeLogDataToFile = (logString, logRange) => {
-  const { startDate, endDate } = logRange;
-  const lastUpdatedInfo = `Log start date: ${startDate}}\nLog end date: ${endDate}\nLast updated: ${new Date()}`;
 
-  // @todo: I might just want to wrap this in a promise
-  fs.writeFile(logDataPath, logString, (err) => {
-    if (err) return console.log('>>>Error writing to file', err);
-    console.log('>>>Updated data file');
+// @improvement: I don't think I need to wrap the wrting in a proimse, I could just have done writeFileSync
+const writeLogDataToFile = (logString) => {
+  // const { startDate, endDate } = logRange;
+  // const lastUpdatedInfo = `Log start date: ${startDate}}\nLog end date: ${endDate}\nLast updated: ${new Date()}`;
+
+  return new Promise((resolve, reject) => {
+    fs.writeFile(logDataPath, logString, (err) => {
+      if (err) reject(err);
+      resolve();
+    });
   });
-  fs.writeFile(lastUpdatedPath, lastUpdatedInfo, (err) => {
-    if (err) return console.log('>>>Error updating data-track file', err);
-    console.log('>>>Updated data track file');
-  });
+
+  // @todo: I would just get this details from the logDataFile itself
+  // fs.writeFile(lastUpdatedPath, lastUpdatedInfo, (err) => {
+  //   if (err) return console.log('>>>Error updating data-track file', err);
+  //   console.log('>>>Updated data track file');
+  // });
 }
 
 const confirmDataFilesExist = () => {
@@ -99,6 +106,7 @@ const readLogDatafromFile = () => {
   });
 }
 
+// @todo: I think I need to call rl.close somewhere
 const askQuestion = (question) => {
   return new Promise((resolve) => {
     rl.question(question, resolve);
@@ -115,13 +123,13 @@ const askForDates = async () => {
   const dateFormat = 'YYYY-MM-DD';
   let startDate = '', endDate = '';
   const defaultStartDate = moment().subtract(1, 'months');
-  const defaultEndDate =  moment();
+  const defaultEndDate = moment();
   do {
-    startDate = await askQuestion('Start date(YYYY-MM-DD)?: '); 
-  } while(startDate.toLowerCase() !== 'd' && !moment(startDate, dateFormat).isValid()); // @improvement: I should be able to output an info when date given is not valid 
+    startDate = await askQuestion('Start date(YYYY-MM-DD)?: ');
+  } while (startDate.toLowerCase() !== 'd' && !moment(startDate, dateFormat).isValid()); // @improvement: I should be able to output an info when date given is not valid 
   do {
-    endDate = await askQuestion('End date(YYYY-MM-DD)?: '); 
-  } while(endDate.toLowerCase() !== 'd' && !moment(endDate, dateFormat).isValid());
+    endDate = await askQuestion('End date(YYYY-MM-DD)?: ');
+  } while (endDate.toLowerCase() !== 'd' && !moment(endDate, dateFormat).isValid());
   startDate = startDate.toLocaleLowerCase() === 'd' ? defaultStartDate : moment(startDate, dateFormat);
   endDate = endDate.toLocaleLowerCase() === 'd' ? defaultEndDate : moment(endDate, dateFormat);
   const dateDiffInhrs = endDate.diff(startDate, 'hours');
@@ -134,10 +142,20 @@ const main = async () => {
 
   let logData;
 
-  if(useFileData) {
+  if (useFileData) {
     const dataFilesExist = await confirmDataFilesExist();
-    if(dataFilesExist) {
+    if (dataFilesExist) {
       ({ logData, lastUpdatedInfo } = await readLogDatafromFile());
+      // Processing the log data
+      // @todo: The logic of processing the log data is duplicated, I should do something to avoid that
+      const logDataJSON = await tsvToJSON(logDataPath);
+      const processedLogData = processData(logDataJSON.data);
+      const startDate = '2019-05-20';
+      const endDate = '2019-05-24' // @todo: Take not that the last log gotten from Amazon is kinda a day behined the actual endDate given in the input
+      // const startDate = processedLogData[0].date;
+      // const endDate = processedLogData[processedLogData.length - 1].date;
+      const logStats = calculateStats(processedLogData, startDate, endDate);
+      displayStats(logStats);
     } else {
       // @todo Make a log to the console to inform the user that data files don't exist
       // and then call main with useFileData set as false
@@ -145,16 +163,97 @@ const main = async () => {
   } else {
     const { startDate, endDate, dateDiffInhrs } = await askForDates();
     let objects = await listObjects(startDate, dateDiffInhrs);
-    objects = objects.map(object =>  getObject(object.Key));
+    objects = objects.map(object => getObject(object.Key));
     objects = await Promise.all(objects);
     const headers = 'id\tgenerated_at\treceived_at\tsource_id\tsource_name\tsource_ip\tfacility_name\tseverity_name\tprogram\tmessage\n';
     logData = headers + objects.join('');
-    const logRange = { startDate: startDate, endDate: endDate }; // @todo: This should not be hardcoded
-    writeLogDataToFile(logData, logRange);
+    await writeLogDataToFile(logData);
+    // Processing the log data
+    const logDataJSON = await tsvToJSON(logDataPath);
+    const processedLogData = processData(logDataJSON);
+
+    const logStats = calculateStats(processedLogData, startDate, endDate);
+    displayStats(logStats);
   }
-  
+
   console.log('>>>>DONEEEEEEEE');
 }
+
+const tsvToJSON = (tsvFilePath) => {
+  return new Promise((resolve, reject) => {
+    tabson(logDataPath, { type: 'object' }, (err, header, data) => {
+      if (err) reject(err);
+      resolve({ header, data });
+    });
+  })
+}
+
+const processData = (data) => {
+  // const { data } = await tsvToJSON(dataFilePath);
+
+  const result = {};
+
+  const validLog = (log) => {
+    if (!log.program.startsWith('app')) return false;
+    if (!log.message) return false;
+    if (!/^(.+?) \/(.+?) (.+?) .*/.test(log.message)) return false;
+    return true;
+  };
+  data.forEach((value) => {
+    if (validLog(value)) {
+      const logMessage = stripAnsi(value.message);
+      logMessageMatch = logMessage.match(/^(.+?) \/(.+?) (.+?) .*/);
+      const [, method, route] = logMessageMatch;
+      if (result[`${method}${route}`]) {
+        result[`${method}${route}`].push({ message: logMessage, date: value.generated_at });
+      } else {
+        result[`${method}${route}`] = [{ message: logMessage, date: value.generated_at }];
+      }
+    }
+  });
+  return result;
+};
+
+const calculateStats = (processedLogData, startDate, endDate) => {
+  const startDateMoment = moment(startDate, 'YYYY-MM-DD HH:mm:ss');
+  const endDateMoment = moment(endDate, 'YYYY-MM-DD HH:mm:ss');
+  const timeRangeMonth = endDateMoment.diff(startDateMoment, 'month');
+  const timeRangeDays = endDateMoment.diff(startDateMoment, 'days');
+  const timeRangeHours = endDateMoment.diff(startDateMoment, 'hour');
+
+  const logStats = {};
+  const logRoutes = Object.keys(processedLogData);
+  logRoutes.forEach(route => {
+    logStats[route] = {
+      reqPerHour: timeRangeHours > 0 ? (processedLogData[route].length / timeRangeHours) : null,
+      reqPerDay: timeRangeDays > 0 ? (processedLogData[route].length / timeRangeDays) : null,
+      reqPerMonth: timeRangeMonth > 0 ? (processedLogData[route].length / timeRangeMonth) : null,
+    }
+  });
+
+  return logStats;
+}
+
+const displayStats = (stats) => {
+  console.log('' +
+    '==========' +
+    'WHOIS APP STATS\n' // @todo: from when to when 
+  );
+  const routes = Object.keys(stats);
+  routes.forEach((route) => {
+    const { reqPerHour, reqPerDay, reqPerMonth } = stats[route];
+    console.log('' +
+      '>>> ' + route + '\n' +
+      'Req per hour: ' + reqPerHour + '\n' +
+      'Req per day: ' + reqPerDay + '\n' +
+      'Req per month: ' + reqPerMonth + '\n'
+    );
+  })
+  console.log('=========='
+  );
+
+}
+
 
 
 main();
