@@ -1,5 +1,6 @@
 require('dotenv').config();
 const moment = require('moment');
+const path = require('path');
 const Data = require('./lib/data');
 const UI = require('./lib/UI');
 const IO = require('./lib/fileIO');
@@ -18,13 +19,19 @@ const main = async () => {
       endDate: dateFilters.endDate,
       dateDiffInhrs: dateFilters.dateDiffInhrs,
     };
+  } else {
+    const fileName = path.basename(io.logDataPath);
+    const [, startDate, endDate] = fileName.match(/^(.*?)to(.*?)\.tsv$/);
+    fetchOptions.startDate = startDate;
+    fetchOptions.endDate = endDate;
   }
   const logDataString = await data.fetchData(useFileData, fetchOptions);
-  io.writeLogDataToFile(logDataString);
+  if (!useFileData) {
+    const fileName = `${fetchOptions.startDate}to${fetchOptions.endDate}.tsv`;
+    io.writeLogDataToFile(logDataString, fileName);
+  }
   const { data: logData } = await io.tsvFileToJSONObject(io.logDataPath);
   const processedLogData = data.processData(logData);
-  /* @todo: If I am using file data,
-  the fetchOptions.startDate and fetchOptions.endDate would be undefined, fix this!! */
   const stats = data.calculateStats(processedLogData, fetchOptions.startDate, fetchOptions.endDate);
   ui.displayStats(stats, fetchOptions.startDate, fetchOptions.endDate);
 };
